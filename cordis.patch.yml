@@ -1,0 +1,4 @@
+# dsh-video-remix bundle layer: exposes the video-remix skill as Harness tools.
+- insert:
+    - id: video-remix
+      name: 'dsh-video-remix'

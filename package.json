@@ -1,0 +1,25 @@
+{
+  "name": "dsh-video-remix",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "把 video-remix skill 的「配音 + 卡片/真实画面」视频生成能力注册成 Harness 工具：render_video、list_voices、voice_samples。Exposes the video-remix CLI as Harness tools — text-card or AI-footage narrated videos.",
+  "icon": "./icon.svg",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale/*.json",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "video-remix",
+  "version": "1.0.0",
+  "description": "Analyze a reference video, then build a new narrated slide video: timecoded frame sheets + timestamped transcript on one side, neural TTS + ffmpeg cards on the other.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./scripts/remix.mjs",
+  "bin": {
+    "video-remix": "./scripts/remix.mjs"
+  },
+  "files": [
+    "scripts",
+    "references",
+    "SKILL.md",
+    "README.md",
+    "_meta.json"
+  ],
+  "scripts": {
+    "help": "node ./scripts/remix.mjs help"
+  },
+  "dependencies": {
+    "@andresaya/edge-tts": "^1.9.1"
+  },
+  "keywords": [
+    "video",
+    "tts",
+    "narration",
+    "subtitles",
+    "ffmpeg",
+    "remix",
+    "skill"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

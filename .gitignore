@@ -1,0 +1,5 @@
+node_modules/
+*.tgz
+生成视频/
+音色试听/
+.video-remix-work/

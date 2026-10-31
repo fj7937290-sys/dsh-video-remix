@@ -474,7 +474,9 @@ async function ttsLocalWindows(text, voiceName, outFile) {
 /* ----------------------------------------------------------------- render */
 
 async function renderSegment(ff, seg, audioFile, duration, outFile, opts, font) {
-  const total = Math.max(1.2, Number(duration) + (opts.gap ?? 0.8))
+  // Only a short tail gap: a long lead-in delay made the narration lag the
+  // picture, and a long tail was audible as a pause between segments.
+  const total = Math.max(1.2, Number(duration) + (opts.gap ?? 0.3))
   const dir = path.dirname(outFile)
   const tag = path.basename(outFile, '.mp4')
   const titleFile = path.join(dir, `${tag}-title.txt`)
@@ -515,7 +517,8 @@ async function renderSegment(ff, seg, audioFile, duration, outFile, opts, font) 
       '-f', 'lavfi', '-i', `color=c=${theme.bg}:s=${w}x${h}:r=30`,
       '-i', audioFile,
       '-vf', filters.join(','),
-      '-af', `adelay=${Math.round((opts.leadMs ?? 400))},apad=pad_dur=1`,
+      // apad pads silence to -t; no leading delay, so audio and picture start together
+      '-af', 'apad',
       '-t', total.toFixed(3),
       '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', '-r', '30',
       '-c:a', 'aac', '-b:a', '128k', '-ar', '44100',
@@ -534,14 +537,88 @@ async function renderSegment(ff, seg, audioFile, duration, outFile, opts, font) 
 async function concatSegments(ff, files, outFile, cwd) {
   const listFile = path.join(cwd, 'concat-list.txt')
   writeFileSync(listFile, files.map((f) => `file '${path.basename(f)}'`).join('\n'), 'utf8')
+  // Re-encode audio: copying AAC keeps each segment's encoder-priming samples,
+  // which is audible as a click at every join.
   const result = await run(
     ff,
-    ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', 'concat-list.txt', '-c', 'copy', outFile],
+    [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      '-f', 'concat', '-safe', '0', '-i', 'concat-list.txt',
+      '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k', '-ar', '44100',
+      outFile,
+    ],
     { timeoutMs: DEFAULTS.ffmpegTimeoutMs, cwd },
   )
   rmSync(listFile, { force: true })
   if (result.code !== 0) throw new Error(`拼接失败：${result.stderr.trim().slice(0, 500)}`)
   return outFile
+}
+
+/**
+ * Still image + slow push-in + text + narration.
+ *
+ * This is the fast path: no generation service in the loop, so a 6-segment
+ * minute-long video renders in about a minute instead of tens of minutes.
+ */
+async function renderImageSegment(ff, seg, audioFile, duration, imgFile, outFile, opts, font) {
+  const total = Math.max(1.2, Number(duration) + (opts.gap ?? 0.3))
+  const dir = path.dirname(outFile)
+  const tag = path.basename(outFile, '.mp4')
+  const titleFile = path.join(dir, `${tag}-title.txt`)
+  const subFile = path.join(dir, `${tag}-sub.txt`)
+  writeFileSync(titleFile, seg.title || '', 'utf8')
+  writeFileSync(subFile, seg.sub || '', 'utf8')
+
+  const w = opts.width || 1280
+  const h = opts.height || 720
+  const fontArg = font ? `fontfile='${escapeFilterPath(font)}':` : ''
+  const rate = Number(opts.zoomRate ?? 0.0007)
+  const maxZoom = Number(opts.zoomMax ?? 1.15)
+
+  const filters = [
+    'scale=2560:-2',
+    `zoompan=z='min(1+${rate}*on,${maxZoom})':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${w}x${h}:fps=30`,
+  ]
+  if (seg.title) {
+    filters.push(
+      `drawtext=${fontArg}textfile=${path.basename(titleFile)}:x=(w-text_w)/2:y=h-190:fontsize=${opts.titleSize || 46}:fontcolor=white:box=1:boxcolor=black@0.45:boxborderw=18`,
+    )
+  }
+  if (seg.sub) {
+    filters.push(
+      `drawtext=${fontArg}textfile=${path.basename(subFile)}:x=(w-text_w)/2:y=h-120:fontsize=${opts.subSize || 24}:fontcolor=0xD8E4F0:box=1:boxcolor=black@0.35:boxborderw=10`,
+    )
+  }
+
+  const result = await run(
+    ff,
+    [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      '-loop', '1', '-framerate', '30', '-i', imgFile,
+      '-i', audioFile,
+      '-vf', filters.join(','),
+      '-af', 'apad',
+      '-t', total.toFixed(3),
+      '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', '-r', '30',
+      '-c:a', 'aac', '-b:a', '128k', '-ar', '44100',
+      path.basename(outFile),
+    ],
+    { timeoutMs: DEFAULTS.ffmpegTimeoutMs, cwd: dir },
+  )
+  if (result.code !== 0) {
+    throw new Error(`渲染第 ${opts.page} 段（图片）失败：${result.stderr.trim().slice(0, 500)}`)
+  }
+  rmSync(titleFile, { force: true })
+  rmSync(subFile, { force: true })
+  return outFile
+}
+
+/** Pick this segment's picture, falling back to cycling through what exists. */
+function resolveSegmentImage(imgDir, available, index) {
+  if (available.length === 0) return null
+  const wanted = `${pad2(index + 1)}.`
+  const own = available.find((n) => n.startsWith(wanted))
+  return path.join(imgDir, own || available[index % available.length])
 }
 
 /* -------------------------------------------------------------- ai visuals */
@@ -939,6 +1016,23 @@ async function cmdRender(ff, positional, options) {
   const visual = String(options.visual || script.visual || 'cards')
   const rendered = []
 
+  // images mode: stills from a directory, no generation service in the loop
+  let imgDir = null
+  let imgAvailable = []
+  if (visual === 'images') {
+    imgDir = options.images
+      ? path.resolve(String(options.images))
+      : path.join(path.dirname(file), String(script.imageDir || 'img'))
+    if (!existsSync(imgDir)) {
+      throw new Error(
+        `visual="images" 需要配图目录，但 ${imgDir} 不存在。用 --images <目录> 指定，或在 script.json 里设 imageDir。`,
+      )
+    }
+    imgAvailable = readdirSync(imgDir).filter((n) => /\.(png|jpe?g|webp)$/i.test(n)).sort()
+    if (imgAvailable.length === 0) throw new Error(`配图目录里没有图片：${imgDir}`)
+    process.stderr.write(`配图 ${imgAvailable.length} 张（${imgDir}），按段落循环复用\n`)
+  }
+
   for (let i = 0; i < segments.length; i += 1) {
     const seg = segments[i]
     const narration = String(seg.narration || seg.title || '')
@@ -961,6 +1055,19 @@ async function cmdRender(ff, positional, options) {
       process.stderr.write(`${tag} 生成 AI 画面（${clipSec}s）...\n`)
       await generateAiClip(seg.prompt, clipSec, script.ratio || '16:9', clip, options)
       await muxClipWithVoice(ff, clip, audioFile, segOut, dur + Number(script.gap ?? 0.4))
+    } else if (visual === 'images') {
+      const imgFile = resolveSegmentImage(imgDir, imgAvailable, i)
+      await renderImageSegment(ff, seg, audioFile, dur, imgFile, segOut, {
+        page: i + 1,
+        total: segments.length,
+        width: script.width,
+        height: script.height,
+        titleSize: script.titleSize,
+        subSize: script.subSize,
+        zoomRate: script.zoomRate,
+        zoomMax: script.zoomMax,
+        gap: script.gap,
+      }, font)
     } else {
       await renderSegment(ff, seg, audioFile, dur, segOut, {
         page: i + 1,
@@ -1009,9 +1116,11 @@ function usage() {
   node remix.mjs voices                         列出可用音色（在线 Edge / 本地 Windows）
   node remix.mjs samples [--out 目录]           为每个音色生成一段试听小样 + 清单
   node remix.mjs analyze <video> [--interval 2] [--out dir] [--no-transcribe]
-  node remix.mjs render <script.json> [--out file.mp4] [--engine edge|local] [--voice 音色名] [--visual cards|ai]
+  node remix.mjs render <script.json> [--out file.mp4] [--engine edge|local] [--voice 音色名] [--visual cards|images|ai]
 
---visual ai 用 agnes-video 生成真实画面（每段需要 prompt 字段，很慢）；默认 cards 是文字卡片。
+--visual cards  文字卡片（默认，快，适合教程）
+--visual images 静态图 + 缓慢推镜 + 文字 + 配音（最快有画面的方式；配图放 img/ 或 --images 指定）
+--visual ai     每段调 agnes-video 生成真实视频（每条几分钟，服务端可能排队）
 
 script.json 形状：
 {

@@ -1,17 +1,19 @@
 {
   "name": "dsh-video-remix",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
-  "description": "把 video-remix skill 的「配音 + 卡片/真实画面」视频生成能力注册成 Harness 工具：render_video、list_voices、voice_samples。Exposes the video-remix CLI as Harness tools — text-card or AI-footage narrated videos.",
+  "description": "把 video-remix skill 的「配音 + 卡片/真实画面」视频生成能力注册成 Harness 工具，并在输入框上方提供音色选择器（可直接试听、可上传自定义声音）。Exposes the video-remix CLI as Harness tools plus a composer voice picker.",
   "icon": "./icon.svg",
   "exports": {
     ".": "./index.js",
+    "./client": "./client.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "index.js",
+    "client.js",
     "cordis.patch.yml",
     "icon.svg",
     "locale/*.json",
@@ -20,6 +22,13 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
     }
   }
 }

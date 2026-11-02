@@ -70,7 +70,26 @@ window.__ModuleLoader__.load({
 
     const metaStyle = { fontSize: 11, opacity: 0.9, whiteSpace: 'nowrap' }
 
+    const COLLAPSE_KEY = 'dsh-video-remix:voice-collapsed'
+
+    function readCollapsed() {
+      try {
+        return window.localStorage.getItem(COLLAPSE_KEY) === '1'
+      } catch {
+        return false
+      }
+    }
+
+    function writeCollapsed(value) {
+      try {
+        window.localStorage.setItem(COLLAPSE_KEY, value ? '1' : '0')
+      } catch {
+        // private mode / storage disabled — collapsing just won't persist
+      }
+    }
+
     function VoicePicker() {
+      const [collapsed, setCollapsed] = React.useState(readCollapsed)
       const [state, setState] = React.useState(null)
       const [offline, setOffline] = React.useState(false)
       const [playing, setPlaying] = React.useState(null)
@@ -160,6 +179,34 @@ window.__ModuleLoader__.load({
         }
         reader.readAsDataURL(file)
         event.target.value = ''
+      }
+
+      const toggle = () => {
+        const next = !collapsed
+        setCollapsed(next)
+        writeCollapsed(next)
+      }
+
+      // Collapsed: one chip that reopens the picker, so the composer stays clean.
+      if (collapsed) {
+        const sel = state && state.selected ? state.selected : null
+        const allVoices = state ? [...(state.voices || []), ...(state.custom || [])] : []
+        const cur = sel ? allVoices.find((v) => v.id === sel.name) : null
+        return h(
+          'div',
+          { style: barStyle },
+          h(
+            'button',
+            {
+              key: 'open',
+              type: 'button',
+              onClick: toggle,
+              title: '展开音色选择',
+              style: btnStyle,
+            },
+            `🎙 音色${cur ? ' · ' + cur.label : ''} ▸`,
+          ),
+        )
       }
 
       if (offline || !state) {
@@ -273,6 +320,18 @@ window.__ModuleLoader__.load({
           : null,
 
         hint ? h('span', { key: 'hint', style: { ...metaStyle, opacity: 0.8 } }, hint) : null,
+
+        h(
+          'button',
+          {
+            key: 'collapse',
+            type: 'button',
+            onClick: toggle,
+            title: '收起音色选择（下次打开仍保持收起）',
+            style: { ...btnStyle, marginLeft: 'auto' },
+          },
+          '收起 ▴',
+        ),
       )
     }
 

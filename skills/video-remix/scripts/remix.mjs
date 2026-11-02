@@ -991,6 +991,26 @@ async function cmdAnalyze(ff, positional, options) {
   process.stdout.write(JSON.stringify({ ok: true, analysisPath, analysis }, null, 2) + '\n')
 }
 
+const DEFAULT_VOICE_NAME = 'zh-CN-YunxiNeural'
+
+/**
+ * Custom audio uploaded by a human lives in <cwd>/音色试听/custom/.
+ * Preference: a file prefixed with this segment's number, then one matching
+ * the requested name, then the first file (so a single recording still works).
+ */
+function resolveCustomAudio(name, tag) {
+  const dir = path.join(process.cwd(), '音色试听', 'custom')
+  if (!existsSync(dir)) return null
+  const files = readdirSync(dir)
+    .filter((n) => /\.(mp3|wav|m4a|ogg)$/i.test(n))
+    .sort()
+  if (files.length === 0) return null
+  const num = tag.replace(/[^0-9]/g, '')
+  const byNumber = files.find((n) => n.startsWith(`${num}-`) || n.startsWith(`${num}.`))
+  const byName = name ? files.find((n) => n === name || n.includes(name)) : null
+  return path.join(dir, byNumber || byName || files[0])
+}
+
 async function cmdRender(ff, positional, options) {
   const scriptPath = positional[1]
   if (!scriptPath) throw new Error('用法：remix.mjs render <script.json> [--out file.mp4]')
@@ -1038,7 +1058,15 @@ async function cmdRender(ff, positional, options) {
     const narration = String(seg.narration || seg.title || '')
     const tag = `seg${pad2(i + 1)}`
     let audioFile
-    if (voice.engine === 'local') {
+    if (voice.engine === 'file') {
+      const custom = resolveCustomAudio(voice.name, tag)
+      if (custom) {
+        audioFile = custom
+      } else {
+        process.stderr.write(`${tag} 没有找到自定义音频，回退到 ${voice.name || '默认音色'}\n`)
+        audioFile = await ttsEdge(narration, DEFAULT_VOICE_NAME, path.join(workDir, `${tag}.mp3`))
+      }
+    } else if (voice.engine === 'local') {
       audioFile = await ttsLocalWindows(narration, voice.name, path.join(workDir, `${tag}.wav`))
     } else {
       audioFile = await ttsEdge(narration, voice.name, path.join(workDir, `${tag}.mp3`))

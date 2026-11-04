@@ -36,9 +36,31 @@ render_video(
 ```
 
 ```
-list_voices()      // 看看有哪些声音
-voice_samples()    // 为每个音色生成一段同样的话，供人试听挑选
+list_voices()        // 看看有哪些声音
+voice_samples()      // 为每个音色生成一段同样的话，供人试听挑选
+search_material(     // 手头没素材？按关键词搜图并下载成 01.jpg、02.jpg …
+  keyword="城市夜景",
+  count=6
+)
 ```
+
+### 没有素材怎么办
+
+`render_video(visual="images")` 需要图片。两种来源：
+
+| 来源 | 做法 |
+|---|---|
+| **自己提供** | 把图放进 `img/`，按 `01.jpg`、`02.jpg` 命名 |
+| **网上搜** | 调 `search_material(keyword="…")`，图片直接落到 `img/` |
+
+```js
+search_material({ keyword: "城市夜景", count: 6 })
+render_video({ title: "…", visual: "images", segments: [...] })
+```
+
+搜索走的是**普通网页图片搜索**（必应），不是正版图库。**发布前请自行确认图片版权** —— 这也是工具描述里明写了的。
+
+> 为什么不用 Openverse / Wikimedia 这些 CC 图库？实测从国内网络访问它们全部超时，百度图片也会拒绝脚本请求。必应是唯一稳定可用的入口。
 
 ---
 

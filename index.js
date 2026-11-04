@@ -330,6 +330,133 @@ function buildSamplesTool() {
   }
 }
 
+/* ------------------------------------------------------- material search */
+
+const SEARCH_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36'
+
+/**
+ * Bing Images is used because the open CC APIs (Openverse, Wikimedia) time out
+ * from mainland networks and Baidu rejects scripted requests. Bing returns the
+ * direct image URLs inside its HTML as `murl&quot;:&quot;...&quot;`.
+ */
+async function searchImageUrls(keyword, want) {
+  const url = `https://cn.bing.com/images/search?q=${encodeURIComponent(keyword)}&first=1&count=${Math.max(want * 3, 20)}`
+  const res = await fetch(url, {
+    headers: {
+      'user-agent': SEARCH_UA,
+      'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+      accept: 'text/html,application/xhtml+xml',
+    },
+    signal: AbortSignal.timeout(20000),
+  })
+  if (!res.ok) throw new Error(`图片搜索返回 HTTP ${res.status}`)
+  const html = await res.text()
+  const found = [...html.matchAll(/murl&quot;:&quot;(https?:\/\/[^&]+?)&quot;/g)].map((m) => m[1])
+  return [...new Set(found)]
+}
+
+async function downloadImage(url) {
+  const res = await fetch(url, {
+    headers: {
+      'user-agent': SEARCH_UA,
+      referer: 'https://cn.bing.com/',
+      accept: 'image/avif,image/webp,image/*,*/*;q=0.8',
+    },
+    signal: AbortSignal.timeout(20000),
+  })
+  if (!res.ok) return null
+  const type = String(res.headers.get('content-type') || '').toLowerCase()
+  if (!type.startsWith('image/')) return null
+  const buf = Buffer.from(await res.arrayBuffer())
+  // Tiny files are placeholders or error pixels, not usable stills.
+  if (buf.length < 20_000) return null
+  return { buf, type }
+}
+
+function extensionFor(url, type) {
+  if (type.includes('png')) return '.png'
+  if (type.includes('webp')) return '.webp'
+  if (type.includes('gif')) return '.gif'
+  if (/\.png(\?|$)/i.test(url)) return '.png'
+  if (/\.webp(\?|$)/i.test(url)) return '.webp'
+  return '.jpg'
+}
+
+function buildSearchMaterialTool(settings) {
+  return {
+    name: 'search_material',
+    description:
+      'Search the web for pictures matching a keyword and save them as numbered stills (01.jpg, 02.jpg …) for render_video with visual="images". ' +
+      'Use it when the user has no material of their own: fetch 4–8 images, then render. ' +
+      'Honest caveat: these come from ordinary web search, not a licensed stock library — check the rights before publishing.',
+    parameters: {
+      type: 'object',
+      properties: {
+        keyword: { type: 'string', description: 'What to search for, e.g. "城市夜景" or "office desk morning light".' },
+        count: { type: 'number', description: 'How many images to keep, 1–12. Defaults to 6.' },
+        out: {
+          type: 'string',
+          description: 'Directory to save into. Defaults to <workspace>/img (where visual="images" looks).',
+        },
+      },
+      required: ['keyword'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          ok: { type: 'boolean' },
+          dir: { type: 'string' },
+          count: { type: 'number' },
+          files: { type: 'array' },
+        },
+      },
+      render: (args, value) => {
+        const files = Array.isArray(value.files) ? value.files : []
+        const lines = [`🖼 搜到并保存 ${value.count} 张素材 → ${value.dir}`]
+        for (const f of files) lines.push(`  ${path.basename(f)}`)
+        lines.push('', '下一步：render_video(visual="images") 会按段号自动取用这些图。')
+        lines.push('注意：图片来源为普通网页搜索，发布前请确认版权。')
+        return [{ type: 'text', text: lines.join('\n') }]
+      },
+    },
+    isConcurrencySafe: () => false,
+    timeoutMs: Math.min(DEFAULTS.renderTimeoutMs, 5 * 60 * 1000),
+    execute: async (args) => {
+      const keyword = String(args.keyword || '').trim()
+      if (!keyword) throw new Error('keyword 不能为空')
+      const want = Math.min(12, Math.max(1, Math.round(Number(args.count) || 6)))
+
+      const skill = locateSkill()
+      if (!skill) throw new Error(skillProblem())
+      const outDir = args.out ? path.resolve(String(args.out)) : path.join(skill.workspace, 'img')
+      mkdirSync(outDir, { recursive: true })
+
+      const urls = await searchImageUrls(keyword, want)
+      if (urls.length === 0) throw new Error(`没有搜到「${keyword}」的图片，换个关键词试试`)
+
+      const saved = []
+      for (const url of urls) {
+        if (saved.length >= want) break
+        try {
+          const got = await downloadImage(url)
+          if (!got) continue
+          const n = String(saved.length + 1).padStart(2, '0')
+          const file = path.join(outDir, `${n}${extensionFor(url, got.type)}`)
+          writeFileSync(file, got.buf)
+          saved.push(file)
+        } catch {
+          // one bad host should not abort the whole search
+        }
+      }
+      if (saved.length === 0) throw new Error('搜到了地址但一张都没下载成功，换个关键词试试')
+      return { ok: true, dir: outDir, count: saved.length, files: saved }
+    },
+  }
+}
+
 /* -------------------------------------------------------- composer routes */
 
 const VOICE_ROUTE = '/_dsh/video-remix/voice'
@@ -541,5 +668,6 @@ export function apply(ctx, config) {
   ctx.effect(() => ctx.tools.register(buildRenderTool(settings)))
   ctx.effect(() => ctx.tools.register(buildVoicesTool()))
   ctx.effect(() => ctx.tools.register(buildSamplesTool()))
+  ctx.effect(() => ctx.tools.register(buildSearchMaterialTool(settings)))
   installVoiceRoutes(ctx)
 }
